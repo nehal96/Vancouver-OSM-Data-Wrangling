@@ -63,7 +63,3 @@ def print_audit(osmfile):
     """
     pprint.pprint(dict(audit(osmfile)))
     print len(audit(osmfile))
-
-
-
-#print_audit(VANCOUVER_CITY_OSM)
