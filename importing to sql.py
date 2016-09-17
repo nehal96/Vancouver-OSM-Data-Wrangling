@@ -7,9 +7,7 @@ NODES_TAGS_CSV = "nodes_tags.csv"
 WAYS_CSV = "ways.csv"
 WAY_NODES_CSV = "way_nodes.csv"
 WAY_TAGS_CSV = "way_tags.csv"
-
-NODES_SQL = "nodes.db"
-NODES_TAGS_SQL = "nodes_tag.db"
+""" Global variables for all CSV files """
 
 NODES_TABLE_NAME = """nodes"""
 NODES_TABLE_PARAMS = """(id INTEGER, lat TEXT, lon TEXT, user TEXT, uid TEXT, version TEXT, changeset TEXT, timestamp TEXT
@@ -37,8 +35,6 @@ def sql_importer(csv_file, sql_file, table_name, table_params, table_fields, tab
         SQL = """INSERT INTO""" + """ """ + table_name + """ """ + table_fields + """ """ + """VALUES""" + """ """ + table_values
     cur.executemany(SQL, csv_reader)
     conn.commit()
-
-#sql_importer(NODES_TAGS_CSV, NODES_TAGS_SQL, NODES_TAGS_TN, NODES_TAGS_TABLE_PARAMS, NODES_TAGS_TF, NODES_TAGS_TV)
 
 
 cur.execute('SELECT user, count(*) FROM nodes GROUP BY user ORDER BY count(*) desc')
