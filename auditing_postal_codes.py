@@ -10,6 +10,8 @@ postal_code_re = re.compile(r'[A-Z^DFIOQUWZ]\d[A-Z^DFIOQU]\s\d[A-Z^DFIOQU]\d$')
 """ Regex that makes sure that postal codes are in the Canadian format. That is,
     alternating uppercase letters and numbers, grouped by 3s, with a space
     after the first group (for example, V6T 1Z4).
+    [V6T1Z4 is also a correct way to represent postal codes, but for the sake of
+    consistency, I want them only in the spaced form.]
 
     Canadian postal code regulations state the following characters cannot be
     used: D, F, I, O, Q, U, except for the first character (letter), where X and
