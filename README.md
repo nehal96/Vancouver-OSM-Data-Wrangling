@@ -3,7 +3,7 @@
 ### Abstract
 For this project I've decided to download OpenStreetMap data for Vancouver from [Mapzen](https://mapzen.com/data/metro-extracts/). The full metro extract was 175MB, so I used Mapzen's Custom Extract tool to select an area with a file size of 72MB.
 
-Once I had the OSM file, I proceeded to familiarize myself with the data, before beginning the auditing and cleaning. I counted the tag types (nodes, ways, etc.), and then explored the users and their contributions. I then audited the street names to check if they were all consistent (for example, if 'Street' was not sometimes written as 'St.'). After that was complete, I wrote code to update and change the inconsistent street names.
+Once I had the OSM file, I proceeded to familiarize myself with the data, before beginning the auditing and cleaning. I counted the tag types (nodes, ways, etc.), and then explored the users and their contributions. I then audited the street names and postal codes to check if they were all consistent (for example, if 'Street' was not sometimes written as 'St.'), or that all postal codes were written in the spaced form (for example, V6T 1Z4). After that was complete, I wrote code to update and change the inconsistent street names and postal codes.
 
 After the data cleaning was complete, I prepared the data for database entry. The XML was parsed and organized according to an SQL schema. The data was then converted from XML into CSV before being imported into a SQLite database.
 
@@ -159,6 +159,84 @@ unlisted = {
 Finally, I had to go through the `unlisted` dictionary to see why their names weren't getting updated. Often, they were just different kinds of mistakes. For example, `Denmanstreet` was actually supposed to be `Denman Street`. A simple fix for this was to just update the `mapping` dictionary to account for these types of mistakes.
 
 The other kind of mistake was street names either did not exist, or were not situated in Vancouver. There were street names from Mexico, Poland, and Germany, among other countries. It is not known how these street names appeared in the audit, but the solution for this is to delete the particular data from the file.
+
+#### Inconsistent Postal Codes
+
+The next area for auditing and cleaning was postal codes. Canadian postal codes are alphanumeric 6-character codes, with the first 3 being the Forward Sortation Area (FSA) and the last 3 being the local delivery unit. The correct format is of the form A1A 1A1, but A1A1A1 is common too. For consistency, I wanted to keep all postal codes in the spaced form, and that was the reason for this audit and clean up.
+
+```python
+def audit(osmfile):
+    """ Iteratively parses through each element in an XML file (in this case
+        for OSM), and first checks if the element is a node or way element. If
+        True, then the function with iterate through each tag in the node or way
+        element, and run the 'is_postal_code' function on it. If True, the
+        function will run the 'audit_postal_code' function on it.
+
+        Returns:
+            list with incorrect postcodes.
+    """
+    correct_PCs = []
+    incorrect_PCs = []
+    for event, element in ET.iterparse(osmfile, events=("start", )):
+        if element.tag == 'node' or element.tag == 'way':
+            for tag in element.iter('tag'):
+                if is_postal_code(tag):
+                    audit_postal_code(correct_PCs, incorrect_PCs, tag.attrib['v'])
+
+    return incorrect_PCs
+```
+
+Running this code, I got a list of 104 incorrect postal codes, of which I'll show a small sample:
+
+```python
+incorrect_PCs = [
+    'V53 3H9',
+    'V6Z1M4',
+    'V6Z1R2',
+    'v5t 4r8',
+    'BC V6B 2E2',
+    'V5T-4T1;V5T 4T1',
+    '179-0085',
+    '95326'
+]
+```
+
+The audit returns a list of incorrect postal codes which I can take a look at and then decide how to clean it. I noticed a lot of 4-digit and 5-digit numerical postal codes, which is not used in Canada, so there is clearly some errors. Also the no-space version was quite common, as well as postal codes where all the letters were lowercase. With that information, I set to write a function that would update the postal codes to the correct version.
+
+```python
+def update_postal_code(osmfile):
+    """ If a postcode is in the list returned by the audit function, it first
+        removes any whitespace and then makes the string uppercase. Then it uses
+        the postal_code_re_alt regex to find a match, and if one is found, it
+        groups the match object and returns the string grouped by 3. If there is
+        no match, it appends the postcode to the problem_PCs list. Next, it
+        iterates through the postcodes in this list, and uses the
+        postal_code_number_re regex to splits the list into numerical and
+        non-numerical postcode lists for further potenial cleaning.
+    """
+    incorrect_PCs = audit(osmfile)
+    for postcode in incorrect_PCs:
+        stripped_upper = postcode.strip().upper()
+        m = postal_code_re_alt.match(stripped_upper)
+        if m:
+            PC = m.group()
+            char_list = list(PC)
+            post_code = char_list[0] + char_list[1] + char_list[2] + " " + \
+                    char_list[3] + char_list[4] + char_list[5]
+            return post_code
+        else:
+            problem_PCs.append(postcode)
+
+    for postcode in problem_PCs:
+        n = postal_code_number_re.search(postcode)
+        if n:
+            number_PC = n.group()
+            number_PCs.append(number_PC)
+            problem_PCs.remove(number_PC)
+        else:
+            pass
+```
+Now, the incorrect postal codes are split into two lists: numerical and non-numerical. When I ran this code, the lists weren't perfectly separate, and at times the same numerical postal code appeared in both lists (for some reason). Not wanting to start deleting incorrect postal codes just yet, I decided to leave this further cleaning for a later time.
 
 I'm sure more problems will appear as I explore the dataset through SQL, but for now let this complete the cleaning and let's prepare the data to import into SQL.
 
@@ -363,7 +441,7 @@ conn.commit()
 cur.execute('''
     CREATE TABLE IF NOT EXISTS nodes(id INTEGER PRIMARY KEY, lat REAL,
     lon REAL, user TEXT, uid INTEGER, version TEXT, changeset INTEGER, timestamp DATE)
-''') 
+''')
 # Creates a new table if another with the name doesn't exist (it shouldn't now that I dropped it earlier)
 conn.commit()
 
@@ -454,6 +532,49 @@ sqlite> SELECT COUNT(*)
 432
 
 ### Further Data Exploration
+
+#### Postal Codes
+```sql
+sqlite> SELECT tags.value, COUNT(*) as num
+   ...> FROM (SELECT * FROM nodes_tags UNION ALL SELECT * FROM ways_tags) AS tags
+   ...> WHERE tags.key = 'postcode' AND tags.type='addr'
+   ...> GROUP BY tags.value;
+```
+```
+48-316   15
+95326    14
+V5V 3A4   7
+V5Y 1R4   6
+V6A 3T8   5
+```
+
+#### Specific Post Code ID
+```sql
+sqlite> SELECT *
+   ...> FROM nodes
+   ...> WHERE id IN (SELECT DISTINCT(id) FROM nodes_tags WHERE key='postcode' AND value='V6J 1M4');
+```
+```
+id|lat|lon|user|uid|version|changeset|timestamp
+1305430209|49.268151|-123.146189|david105|2982288|4|31951326|2015-06-12T21:23:46Z
+```
+
+#### Node Info from Post Code ID
+```sql
+sqlite> SELECT *
+   ...> FROM nodes_tags
+   ...> WHERE id='1305430209';
+```
+```
+id|key|value|type
+1305430209|name|Wow Interiors|regular
+1305430209|shop|furniture|regular
+1305430209|city|Vancouver|addr
+1305430209|street|West 4th Avenue|addr
+1305430209|postcode|V6J 1M4|addr
+1305430209|province|BC|addr
+1305430209|housenumber|1823|addr
+```
 
 #### Top 10 Amenities
 ```sql
@@ -550,15 +671,21 @@ Immediately it's clear that there are duplicate names that invalidate the count,
 
 Also, my personal experience in Vancouver argues that there are way more than 7 Starbucks coffee shops in the city. So there is definitely lots of missing data in the dataset.
 
+## Improving OSM data
+
+To improve the data being added by users in OpenStreetMaps, I'd recommend implementing a gamification or badging system where users get their achievements recognized, and if they're not doing something correctly, they're notified through this same manner. I was/am a big fan of KhanAcademy's badge system, and often it motivated me to watch more videos or answer more exercises. Other than just adding some fun to the entire process, it also is a measure of trustworthiness of the user, and a check if users are adhering to the guidelines.
+
+One issue with this is that it is a big and complicated system to implement. Being an open source community, OpenStreetMaps likely must measure the pros and cons of such a considerable step. Apart from being ambitious, the concept possesses an issue with the very thing that makes it better: incentive. If the gamification incentivizes to use OSM more, it might mean users abuse the system and add data as quickly as possible, in an effort to get more badges or points. In this case, data quality is compromised, and the effort is counter-productive. There must be a more efficient and effective check on data quality when it's being added, but again that's another system to add on. A simpler solution might be to just do more frequent audits on the data, or create a bot that finds inconsistencies in the data (or newly added data) very quickly.
+
 ## Conclusion
 
 Auditing and cleaning data is a long and tedious process, but it is also arguably the most important. Finding and correcting mistakes in the data makes sure that any conclusions I make from it are accurate and trustworthy. It also makes the exploration concise and straightforward. Unfortunately, it's difficult to know what the mistakes are and where they might be beforehand, so going through the entire process like this invariably shows where there are errors. Using this information, I can go back and audit and clean the data, and redo the process. Also, I now know where mistakes usually end up and can use that knowledge in future OSM data analysis.
 
 With clean and accurate data, one can make correct decisions based of it. Making decisions with wrong data is just as misguided as making decisions without data, so auditing and cleaning are extremely important steps. That's what I've learnt through this project.
 
-To improve the data being added by users in OpenStreetMaps, I'd recommend implementing a gamification or badging system where users get their achievements recognized, and if they're not doing something correctly, they're notified through this same manner. I was/am a big fan of KhanAcademy's badge system, and often it motivated me to watch more videos or answer more exercises. Other than just adding some fun to the entire process, it also is a measure of trustworthiness of the user, and a check if users are adhering to the guidelines. It is a big and complicated system to implement, but I believe that it can improve the quality of data being added into OpenStreetMaps.
 
-***Areas to take this project forward: 
+***Areas to take this project forward:
 - Auditing and cleaning coffee shop and restaurant data
+- Deleting numerical/wrong postal codes and updating unique mistakes
 - Deleting the non-existent/foreign street names from the dataset
 - More detailed/new SQL queries with cleaner data (and possibly find more mistakes)
